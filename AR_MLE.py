@@ -2,6 +2,7 @@ import matplotlib.pyplot as plt
 import torch
 import torch.nn.functional as F
 from scipy.stats import pearsonr
+from tqdm import tqdm
 
 from functions import (
     SkillParameters,
@@ -9,6 +10,7 @@ from functions import (
     play_games_erdos_renyi,
     setup,
     solve_for_phi_matrices,
+    new_solve_for_phi_matrices,
     btl_matrix_from_scores
 )
 
@@ -24,14 +26,15 @@ step, meaning I will need to use Lagrange multipliers in the solution.
 
 # parameters
 
-num_players = 3
-AR_order_p = 1
+num_players = 20
+AR_order_p = 3
 erdos_renyi_p = 1
 std_dev = 0
-num_timesteps = 4
-epochs = 1000
-N_grad_descent = 100
-weight = 1e-2
+num_timesteps = 5
+epochs = 10000
+N_grad_descent = 10
+weight = 1e-1
+STEP = 10
 
 # setup
 players = list(range(0, num_players))
@@ -75,7 +78,7 @@ btl_likelihoods = []
 total_likelihoods = []
 # pearson_correlations = []
 
-for epoch in range(epochs):
+for epoch in tqdm(range(epochs)):
     # first, predict alphas
     # BTL_likelihood = skill_params.compute_log_BTL(Z, W, num_players, num_timesteps)
 
@@ -97,11 +100,11 @@ for epoch in range(epochs):
     # second, update phi estimate
     with torch.no_grad():
 
-        Phi_matrices_estimate = solve_for_phi_matrices(
+        Phi_matrices_estimate = new_solve_for_phi_matrices(
             skill_params_est.alpha_estimates, num_players, AR_order_p, num_timesteps
         )
 
-    if epoch % 100 == 0:
+    if epoch % STEP == 0:
 
         print("------------------------------")
         print("Epoch: ", epoch)
@@ -125,12 +128,12 @@ for epoch in range(epochs):
             F.mse_loss(alpha_estimates_normalized, actual_skill_params_normalized).item(),
         )
         print("p_matrix error: ", F.mse_loss(Phi_matrices, Phi_matrices_estimate).item())
-        print(
-            "Alpha estimates:\n",
-            alpha_estimates_normalized.data,
-            "\nTrue alpha:\n",
-            actual_skill_params_normalized.data,
-        )
+        # print(
+        #     "Alpha estimates:\n",
+        #     alpha_estimates_normalized.data,
+        #     "\nTrue alpha:\n",
+        #     actual_skill_params_normalized.data,
+        # )
 
         true_alphas_error.append(
             F.mse_loss(
@@ -146,44 +149,83 @@ for epoch in range(epochs):
         total_likelihoods.append(total_likelihood.item())
 
 
-epochs_logged = list(range(0, epochs, 100))
+epochs_logged = list(range(0, epochs, STEP))
 
 
-print("BTL Matrices")
-print("------------------------------")
-for i in range(num_timesteps):
-    print(f"Timestep {i}")
+# --- Figure 1: Errors (individual subplots) ---
+fig, axes = plt.subplots(1, 2, figsize=(12, 4), sharex=True)
+axes[0].plot(epochs_logged, true_alphas_error, linewidth=2)
+axes[0].set_title("Alpha Estimates Error (MSE)")
+axes[0].set_xlabel("Epoch")
+axes[0].set_ylabel("Error (MSE)")
+axes[0].grid(True)
 
-    print(f"Real:\n{btl_matrix_from_scores(torch.squeeze(actual_skill_params)[:, AR_order_p + i])}")
-    print(f"Predicted:\n{btl_matrix_from_scores(skill_params_est.alpha_estimates[:, AR_order_p + i])}")
-    print("------------------------------")
+axes[1].plot(epochs_logged, true_p_matrix_error, linewidth=2)
+axes[1].set_title("P Matrix Error (MSE)")
+axes[1].set_xlabel("Epoch")
+axes[1].grid(True)
 
-# --- Figure 1: Errors (same scale) ---
-plt.figure(figsize=(10, 4))
-plt.plot(
-    epochs_logged, true_alphas_error, label="Alpha Estimates Error (MSE)", linewidth=2
-)
-plt.plot(epochs_logged, true_p_matrix_error, label="P Matrix Error (MSE)", linewidth=2)
-plt.xlabel("Epoch")
-plt.ylabel("Error (MSE)")
-plt.title("Model Estimation Errors Over Time")
-plt.legend()
-plt.grid(True)
-plt.tight_layout()
-plt.savefig("errors.pdf")
+fig.suptitle("Model Estimation Errors Over Time")
+fig.tight_layout()
+fig.savefig("errors.pdf")
 
-# --- Figure 2: Likelihoods and AR Error (same scale) ---
-plt.figure(figsize=(10, 4))
-plt.plot(epochs_logged, ar_errors, label="AR Error", linewidth=2)
-plt.plot(epochs_logged, btl_likelihoods, label="BTL Likelihood", linewidth=2)
-plt.plot(epochs_logged, total_likelihoods, label="Total Likelihood", linewidth=2)
-plt.xlabel("Epoch")
-plt.ylabel("Loss/Likelihood")
-plt.title("AR Error, BTL Likelihood, and Total Likelihood Over Time")
-plt.legend()
-plt.grid(True)
-plt.tight_layout()
-plt.savefig("likelihoods.pdf")
+# --- Figure 2: Likelihoods and AR Error (individual subplots) ---
+fig, axes = plt.subplots(1, 3, figsize=(15, 4), sharex=True)
+axes[0].plot(epochs_logged, ar_errors, linewidth=2)
+axes[0].set_title("AR Error")
+axes[0].set_xlabel("Epoch")
+axes[0].set_ylabel("Loss/Likelihood")
+axes[0].grid(True)
+
+axes[1].plot(epochs_logged, btl_likelihoods, linewidth=2)
+axes[1].set_title("BTL Likelihood")
+axes[1].set_xlabel("Epoch")
+axes[1].grid(True)
+
+axes[2].plot(epochs_logged, total_likelihoods, linewidth=2)
+axes[2].set_title("Total Likelihood")
+axes[2].set_xlabel("Epoch")
+axes[2].grid(True)
+
+fig.suptitle("AR Error, BTL Likelihood, and Total Likelihood Over Time")
+fig.tight_layout()
+fig.savefig("likelihoods.pdf")
+
+# print("BTL Matrices")
+# print("------------------------------")
+# for i in range(num_timesteps):
+#     print(f"Timestep {i}")
+#
+#     print(f"Real:\n{btl_matrix_from_scores(torch.squeeze(actual_skill_params)[:, AR_order_p + i])}")
+#     print(f"Predicted:\n{btl_matrix_from_scores(skill_params_est.alpha_estimates[:, AR_order_p + i])}")
+#     print("------------------------------")
+#
+# # --- Figure 1: Errors (same scale) ---
+# plt.figure(figsize=(10, 4))
+# plt.plot(
+#     epochs_logged, true_alphas_error, label="Alpha Estimates Error (MSE)", linewidth=2
+# )
+# plt.plot(epochs_logged, true_p_matrix_error, label="P Matrix Error (MSE)", linewidth=2)
+# plt.xlabel("Epoch")
+# plt.ylabel("Error (MSE)")
+# plt.title("Model Estimation Errors Over Time")
+# plt.legend()
+# plt.grid(True)
+# plt.tight_layout()
+# plt.savefig("errors.pdf")
+#
+# # --- Figure 2: Likelihoods and AR Error (same scale) ---
+# plt.figure(figsize=(10, 4))
+# plt.plot(epochs_logged, ar_errors, label="AR Error", linewidth=2)
+# plt.plot(epochs_logged, btl_likelihoods, label="BTL Likelihood", linewidth=2)
+# plt.plot(epochs_logged, total_likelihoods, label="Total Likelihood", linewidth=2)
+# plt.xlabel("Epoch")
+# plt.ylabel("Loss/Likelihood")
+# plt.title("AR Error, BTL Likelihood, and Total Likelihood Over Time")
+# plt.legend()
+# plt.grid(True)
+# plt.tight_layout()
+# plt.savefig("likelihoods.pdf")
 
 # # --- Figure 3: Pearson ---
 # plt.figure(figsize=(10, 4))

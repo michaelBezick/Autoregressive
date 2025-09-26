@@ -234,6 +234,88 @@ def generate_next_skill_params(
     return summed_w_noise
 
 
+def new_solve_for_phi_matrices(
+    all_skill_parameters: torch.Tensor, n: int, p: int, num_timesteps: int
+):
+    all_skill_parameters = all_skill_parameters.permute(
+        (1, 0)
+    )  # (timesteps + AR_order) x (num_players)
+
+    # first, create the pxp matrix of A matrices
+    matrix_of_A_matrices = torch.zeros((p, p, n, n), device="cuda")  # 4D first
+
+    for k in range(p):
+        for i in range(p):
+            A_ki = torch.zeros((n, n), device="cuda")
+            for t in range(num_timesteps):
+                A_ki += torch.outer(
+                    all_skill_parameters[p + t - k], all_skill_parameters[p + t - i]
+                )
+
+            matrix_of_A_matrices[k, i] = A_ki
+
+    # second, create a px1 vector of A matrices
+    vector_of_A_matrices = torch.zeros((p, n, n), device="cuda")
+    for i in range(p):
+        A_neg_1_k = torch.zeros((n, n), device="cuda")
+
+        for t in range(
+            num_timesteps - 1
+        ):  # -1 because formula would otherwise go past end
+
+            A_neg_1_k += torch.outer(
+                all_skill_parameters[p + t + 1], all_skill_parameters[p + t - i]
+            )
+
+        vector_of_A_matrices[i] = A_neg_1_k
+
+    # third, solve for Lagrange multipliers
+    matrix_of_A_matrices_2D = (
+        matrix_of_A_matrices.permute(0, 2, 1, 3).contiguous().view(p * n, p * n)
+    )
+
+    vector_of_A_matrices_2D = vector_of_A_matrices.contiguous().view(p * n, n)
+
+    S = torch.kron(
+        torch.eye(p, device="cuda"), torch.ones(n, 1, device="cuda").t()
+    ) @ torch.linalg.pinv(matrix_of_A_matrices_2D)
+    T = vector_of_A_matrices_2D
+    U = torch.ones((p, 1), device="cuda") @ torch.ones((n, 1), device="cuda").t()
+
+    RHS = S @ T - U
+
+    A = torch.kron(torch.eye(n, device="cuda"), S)
+
+    # vectorize RHS by stacking columns
+    c = RHS.T.reshape(-1)
+
+    R = torch.kron(torch.eye(p * n, device="cuda"), torch.ones((n, 1), device="cuda"))
+
+    A_hat = A @ R
+
+    rank = torch.linalg.matrix_rank(A_hat)
+    if rank != n * p:
+        print(f"A_hat rank: {rank} is not equal to n * p: {n * p}")
+
+    b_hat = torch.linalg.solve(A_hat, c)
+
+    # reshape to get Lambda ^ top
+    Lambda_t = b_hat.reshape(n, p).T.contiguous()
+
+    assert Lambda_t.shape[0] == p and Lambda_t.shape[1] == n
+
+    # lastly, plug back into equation (6) to find phi
+
+    Phi_matrices = torch.linalg.pinv(matrix_of_A_matrices_2D) @ (
+        vector_of_A_matrices_2D
+        - torch.kron(Lambda_t, torch.ones((n, 1), device="cuda"))
+    )
+
+    Phi_matrices = Phi_matrices.reshape(p, n, n)
+
+    return Phi_matrices
+
+
 def solve_for_phi_matrices(
     all_skill_parameters: torch.Tensor, n: int, p: int, num_timesteps: int
 ):
