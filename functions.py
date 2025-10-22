@@ -39,6 +39,21 @@ class SkillParameters(nn.Module):
 
         self.AR_order_p = AR_order_p
 
+    def compute_log_BTL_vectorized_new(self, Z, W, num_players):
+        i_idx, j_idx = torch.triu_indices(num_players, num_players, offset=1)
+
+        Z_pairs = Z[i_idx, j_idx, :]  # (pairs, T)
+        W_pairs = W[i_idx, j_idx, :]  # (pairs, T)
+
+        sliced_alpha = self.alpha_estimates[:, -Z.shape[-1]:]  # (n, T)
+        s_i = sliced_alpha[i_idx, :]         # (pairs, T)
+        s_j = sliced_alpha[j_idx, :]         # (pairs, T)
+
+        # Stable: logaddexp
+        log_den = torch.logaddexp(s_i, s_j)
+        # Sum over all observed comparisons
+        loglik = (Z_pairs * s_i + W_pairs * s_j - (Z_pairs + W_pairs) * log_den).sum()
+        return loglik
     def compute_log_BTL_vectorized(self, Z, W, num_players):
         i_idx, j_idx = torch.triu_indices(num_players, num_players, offset=1)
 
@@ -79,6 +94,26 @@ class SkillParameters(nn.Module):
 
         return log_BTL_sum
 
+    def compute_AR_error_new(self, Phi_matrices_estimate, num_timesteps, AR_order_p):
+        est = self.alpha_estimates  # (n, T+p)
+        n = est.size(0)
+        total_se = 0.0
+        count = 0
+
+        # Use same time window as BTL target columns: [p, p+num_timesteps)
+        for t in range(AR_order_p, AR_order_p + num_timesteps):
+            # shape: (p, n, 1)
+            last = est[:, t - AR_order_p : t].T.unsqueeze(2)
+            # Φ: (p, n, n); bmm -> (p, n, 1); sum over p -> (n, 1)
+            pred = torch.bmm(Phi_matrices_estimate, last).sum(dim=0).squeeze(1)  # (n,)
+            actual = est[:, t]  # (n,)
+
+            se = (pred - actual).pow(2).sum()
+            total_se = total_se + se
+            count += n
+
+        # Return MSE to keep scale comparable
+        return total_se / (count + 1e-8)
     def compute_AR_error(self, Phi_matrices_estimate, num_timesteps, AR_order_p):
 
         skill_param_estimates = self.alpha_estimates
@@ -87,7 +122,7 @@ class SkillParameters(nn.Module):
 
         total_error = 0
 
-        for t in range(AR_order_p, num_timesteps):
+        for t in range(AR_order_p, AR_order_p + num_timesteps):
             # get block of previous p skill parameters, assuming first index is timestep (check later)
             last_p_skill_params = skill_param_estimates[:, t - AR_order_p : t]
             last_p_skill_params = torch.permute(last_p_skill_params, (1, 0)).unsqueeze(
@@ -131,6 +166,20 @@ class MLP(nn.Module):
         return self.layers(x).view(-1, self.num_players, self.p)
 
 
+def rescale_for_radius(Phi_list, target=0.99, iters=30):
+    S = sum(Phi_list)                        # n x n
+    v = torch.randn(S.size(0), 1)
+    v = v / v.norm()
+    for _ in range(iters):                   # power iteration
+        v = S @ v
+        v = v / (v.norm() + 1e-8)
+    lam = (v.T @ (S @ v) / (v.T @ v)).item() # Rayleigh quotient
+    scale = target / max(abs(lam), 1e-8)
+    return [scale * P for P in Phi_list]
+
+def normalize_columns(M):
+    return M / (M.sum(dim=0, keepdim=True) + 1e-8)
+
 def setup(num_players, p) -> Tuple[List[torch.Tensor], torch.Tensor]:
     """
     Take the max skill param at each timestep, make the max 0 by linearly shifting down
@@ -144,6 +193,14 @@ def setup(num_players, p) -> Tuple[List[torch.Tensor], torch.Tensor]:
     # columns must sum to 1, so take softmax
     Phi_matrices = torch.randn((p, num_players, num_players))
     Phi_matrices = F.softmax(Phi_matrices, dim=1)
+
+    # spectral rescaling
+    Phi_list = [Phi_matrices[k] for k in range(p)]
+    Phi_list = rescale_for_radius(Phi_list, target=0.995)
+    #renormalize columns
+    Phi_list = [normalize_columns(P) for P in Phi_list]
+    Phi_matrices = torch.stack(Phi_list, dim=0)
+
 
     # construct rank 1 approximation: compute eigenvector decomp.
     # take eigenvectors and divide by largest eigenvalue
@@ -172,7 +229,7 @@ def play_game(skill_params, players, linearly_indexed_matrix):
     prob_1_beats_2 = torch.sigmoid(diff)
 
     try:
-        outcome = np.random.binomial(1, prob_1_beats_2)
+        outcome = np.random.binomial(1, float(prob_1_beats_2))
     except:
         print(player1_skill)
         print(player2_skill)

@@ -6,12 +6,12 @@ from tqdm import tqdm
 
 from functions import (
     SkillParameters,
+    btl_matrix_from_scores,
     generate_next_skill_params,
+    new_solve_for_phi_matrices,
     play_games_erdos_renyi,
     setup,
     solve_for_phi_matrices,
-    new_solve_for_phi_matrices,
-    btl_matrix_from_scores
 )
 
 """
@@ -26,14 +26,14 @@ step, meaning I will need to use Lagrange multipliers in the solution.
 
 # parameters
 
-num_players = 20
-AR_order_p = 3
+num_players = 100
+AR_order_p = 10
 erdos_renyi_p = 1
-std_dev = 0
-num_timesteps = 5
-epochs = 10000
-N_grad_descent = 10
-weight = 1e-1
+std_dev = 1e-1
+num_timesteps = 30
+epochs = 500
+N_grad_descent = 20  # should repeat until convergence
+weight = 10
 STEP = 10
 
 # setup
@@ -76,19 +76,22 @@ true_alphas_error = []
 ar_errors = []
 btl_likelihoods = []
 total_likelihoods = []
-# pearson_correlations = []
 
 for epoch in tqdm(range(epochs)):
-    # first, predict alphas
-    # BTL_likelihood = skill_params.compute_log_BTL(Z, W, num_players, num_timesteps)
 
     for _ in range(N_grad_descent):
 
         optimizer.zero_grad()
-        BTL_likelihood = skill_params_est.compute_log_BTL_vectorized(Z, W, num_players)
-        AR_error = skill_params_est.compute_AR_error(
+        BTL_likelihood = skill_params_est.compute_log_BTL_vectorized_new(
+            Z, W, num_players
+        )
+
+        AR_error = skill_params_est.compute_AR_error_new(
             Phi_matrices_estimate, num_timesteps, AR_order_p
         )
+
+        # normalizing per player
+        AR_error /= num_players
 
         total_likelihood = BTL_likelihood - weight * AR_error
 
@@ -125,15 +128,13 @@ for epoch in tqdm(range(epochs)):
 
         print(
             "skill_params error: ",
-            F.mse_loss(alpha_estimates_normalized, actual_skill_params_normalized).item(),
+            F.mse_loss(
+                alpha_estimates_normalized, actual_skill_params_normalized
+            ).item(),
         )
-        print("p_matrix error: ", F.mse_loss(Phi_matrices, Phi_matrices_estimate).item())
-        # print(
-        #     "Alpha estimates:\n",
-        #     alpha_estimates_normalized.data,
-        #     "\nTrue alpha:\n",
-        #     actual_skill_params_normalized.data,
-        # )
+        print(
+            "p_matrix error: ", F.mse_loss(Phi_matrices, Phi_matrices_estimate).item()
+        )
 
         true_alphas_error.append(
             F.mse_loss(
