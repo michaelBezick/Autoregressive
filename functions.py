@@ -8,6 +8,89 @@ import torch.nn as nn
 import torch.nn.functional as F
 from numpy.matlib import matrix
 
+def optimize_alphas_until_converged(
+    skill_params_est,
+    Phi_matrices_estimate,
+    Z,
+    W,
+    num_players,
+    num_timesteps,
+    AR_order_p,
+    weight,
+    optimizer,
+    max_steps=5000,      # hard cap
+    rel_tol=1e-3,        # relative loss improvement tolerance
+    grad_tol=5e-5,       # gradient norm tolerance
+    patience=20,         # stop if no meaningful improvement for this many steps
+    grad_clip=5.0        # set None to disable
+):
+    """
+    Runs the inner 'alpha' optimization until convergence criteria are met.
+    Returns (BTL_likelihood, AR_error, total_likelihood, steps_taken, grad_norm_last)
+    """
+    last_loss = None
+    no_improve = 0
+    steps_taken = 0
+    gnorm_val = float("inf")
+
+    for k in range(1, max_steps + 1):
+
+        optimizer.zero_grad(set_to_none=True)
+
+        # compute objective parts
+        BTL_likelihood = skill_params_est.compute_log_BTL_vectorized_new(Z, W, num_players)
+        AR_error = skill_params_est.compute_AR_error_new(Phi_matrices_estimate, num_timesteps, AR_order_p)
+
+        # normalize per game
+        BTL_likelihood /= m.comb(num_players, 2)
+
+        # normalize per player as before
+        AR_error = AR_error / num_players
+
+        total_likelihood = BTL_likelihood - weight * AR_error
+        loss = -total_likelihood
+
+        # backprop
+        loss.backward()
+        print(BTL_likelihood, AR_error, loss)
+
+        # gradient norm for a stall criterion (computed BEFORE the step)
+        with torch.no_grad():
+            sq_sum = 0.0
+            for p in skill_params_est.parameters():
+                if p.grad is not None:
+                    sq_sum += (p.grad.detach()**2).sum().item()
+            gnorm_val = (sq_sum ** 0.5)
+
+        # optional clipping
+        if grad_clip is not None:
+            torch.nn.utils.clip_grad_norm_(skill_params_est.parameters(), grad_clip)
+
+        optimizer.step()
+
+        # check relative improvement
+        cur = loss.detach().item()
+        if last_loss is not None:
+            rel_impr = (last_loss - cur) / max(1.0, abs(last_loss))
+            if rel_impr < rel_tol:
+                no_improve += 1
+            else:
+                no_improve = 0
+        last_loss = cur
+
+        steps_taken = k
+
+        # stop if either grads got tiny or improvement stalled for a while
+        if gnorm_val < grad_tol or no_improve >= patience:
+            break
+
+    return (
+        BTL_likelihood.detach(),
+        AR_error.detach(),
+        total_likelihood.detach(),
+        steps_taken,
+        gnorm_val,
+    )
 
 def btl_matrix_from_scores(s: torch.Tensor, diag: str = "half") -> torch.Tensor:
     """

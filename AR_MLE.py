@@ -1,3 +1,5 @@
+import math as m
+
 import matplotlib.pyplot as plt
 import torch
 import torch.nn.functional as F
@@ -9,6 +11,7 @@ from functions import (
     btl_matrix_from_scores,
     generate_next_skill_params,
     new_solve_for_phi_matrices,
+    optimize_alphas_until_converged,
     play_games_erdos_renyi,
     setup,
     solve_for_phi_matrices,
@@ -32,8 +35,9 @@ erdos_renyi_p = 1
 std_dev = 1e-1
 num_timesteps = 30
 epochs = 500
-N_grad_descent = 20  # should repeat until convergence
+N_grad_descent = 10
 weight = 10
+lr = 1e-3
 STEP = 10
 
 # setup
@@ -61,7 +65,7 @@ actual_skill_params = torch.stack(actual_skill_params, dim=1)
 # now Z and W have the necessary data, can run algorithm
 
 skill_params_est = SkillParameters(num_players, num_timesteps, AR_order_p)
-optimizer = torch.optim.Adam(params=skill_params_est.parameters())
+optimizer = torch.optim.Adam(params=skill_params_est.parameters(), lr=lr)
 Phi_matrices_estimate = torch.randn((AR_order_p, num_players, num_players))
 
 skill_params_est = skill_params_est.cuda()
