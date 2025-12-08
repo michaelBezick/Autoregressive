@@ -6,15 +6,12 @@ import torch.nn.functional as F
 from scipy.stats import pearsonr
 from tqdm import tqdm
 
-from functions import (
-    SkillParameters,
-    btl_matrix_from_scores,
+from functions_fixed import (
     generate_next_skill_params,
-    new_solve_for_phi_matrices,
-    optimize_alphas_until_converged,
     play_games_erdos_renyi,
     setup,
     solve_for_phi_matrices,
+    SkillParametersOneFixed,
 )
 
 """
@@ -29,14 +26,14 @@ step, meaning I will need to use Lagrange multipliers in the solution.
 
 # parameters
 
-num_players = 100
-AR_order_p = 10
+num_players = 30
+AR_order_p = 1
 erdos_renyi_p = 1
 std_dev = 1e-1
-num_timesteps = 30
-epochs = 2_000
+num_timesteps = 100
+epochs = 10_000
 N_grad_descent = 10
-weight = 30
+weight = 100
 lr = 1e-3
 STEP = 10
 
@@ -56,17 +53,29 @@ for t in range(num_timesteps):
     next_skill_params = generate_next_skill_params(
         skill_params, Phi_matrices, AR_order_p, std_dev
     )
+
     skill_params.append(next_skill_params)
-    play_games_erdos_renyi(next_skill_params, players, erdos_renyi_p, Z, W, t)
+    play_games_erdos_renyi(
+        next_skill_params,
+        players,
+        erdos_renyi_p,
+        Z,
+        W,
+        t,
+        games_per_pair=1,
+    )
+
+
+
 
 actual_skill_params = skill_params
 actual_skill_params = torch.stack(actual_skill_params, dim=1)
 
 # now Z and W have the necessary data, can run algorithm
 
-skill_params_est = SkillParameters(num_players, num_timesteps, AR_order_p)
+skill_params_est = SkillParametersOneFixed(num_players, num_timesteps, AR_order_p)
 optimizer = torch.optim.Adam(params=skill_params_est.parameters(), lr=lr)
-Phi_matrices_estimate = torch.randn((AR_order_p, num_players, num_players))
+Phi_matrices_estimate = torch.randn((AR_order_p, num_players - 1, num_players - 1))
 
 skill_params_est = skill_params_est.cuda()
 W = W.cuda()
@@ -80,22 +89,21 @@ true_alphas_error = []
 ar_errors = []
 btl_likelihoods = []
 total_likelihoods = []
+projected_mean_errors = []
 
 for epoch in tqdm(range(epochs)):
 
     for _ in range(N_grad_descent):
 
         optimizer.zero_grad()
-        BTL_likelihood = skill_params_est.compute_log_BTL_vectorized_new(
-            Z, W, num_players
-        )
+        BTL_likelihood = skill_params_est.compute_log_BTL(Z, W, num_players)
 
-        AR_error = skill_params_est.compute_AR_error_new(
+        AR_error = skill_params_est.compute_AR_error(
             Phi_matrices_estimate, num_timesteps, AR_order_p
         )
 
         # normalizing per player
-        AR_error /= num_players
+        AR_error /= num_players - 1
 
         total_likelihood = BTL_likelihood - weight * AR_error
 
@@ -107,8 +115,11 @@ for epoch in tqdm(range(epochs)):
     # second, update phi estimate
     with torch.no_grad():
 
-        Phi_matrices_estimate = new_solve_for_phi_matrices(
-            skill_params_est.alpha_estimates, num_players, AR_order_p, num_timesteps
+        Phi_matrices_estimate = solve_for_phi_matrices(
+            skill_params_est.alpha_estimates[1:, :],  # drop player 0
+            num_players - 1,
+            AR_order_p,
+            num_timesteps,
         )
 
     if epoch % STEP == 0:
@@ -153,10 +164,13 @@ for epoch in tqdm(range(epochs)):
         btl_likelihoods.append(BTL_likelihood.item())
         total_likelihoods.append(total_likelihood.item())
 
+
+
 epochs_logged = list(range(0, epochs, STEP))
 
 # ---- Robust outlier-aware plotting helpers ----
 import numpy as np
+
 
 def robust_mask_mad(y, k: float = 3.5):
     """
@@ -176,21 +190,34 @@ def robust_mask_mad(y, k: float = 3.5):
     keep = np.abs(y - med) <= k * sigma
     return finite & keep
 
-def plot_series(ax, x, y, label=None, k=3.5, color=None, scatter_outliers=True, linewidth=2):
-    """
-    Plot y vs x while ignoring outliers via MAD. Optionally scatter the removed outliers.
-    """
+def plot_series(
+    ax, x, y, label=None, k=1000, color=None,
+    scatter_outliers=False, linewidth=2,
+    remove_outliers=False,
+):
     x = np.asarray(x)
     y = np.asarray(y, dtype=float)
-    mask = robust_mask_mad(y, k=k)
+
+    if remove_outliers:
+        mask = robust_mask_mad(y, k=k)
+    else:
+        # Only drop non-finite values (or even keep everything if you want)
+        mask = np.isfinite(y)
+
     ax.plot(x[mask], y[mask], linewidth=linewidth, label=label, color=color)
-    if scatter_outliers and (~mask).any():
+
+    if remove_outliers and scatter_outliers and (~mask).any():
         ax.scatter(x[~mask], y[~mask], s=12, alpha=0.35, color=color)
+
+
+
 
 # --- Figure 1: Errors (individual subplots) ---
 fig, axes = plt.subplots(1, 2, figsize=(12, 4), sharex=True)
 
-plot_series(axes[0], epochs_logged, true_alphas_error, label="Alpha Estimates Error (MSE)")
+plot_series(
+    axes[0], epochs_logged, true_alphas_error, label="Alpha Estimates Error (MSE)"
+)
 axes[0].set_title("Alpha Estimates Error (MSE)")
 axes[0].set_xlabel("Epoch")
 axes[0].set_ylabel("Error (MSE)")
@@ -206,7 +233,7 @@ fig.tight_layout()
 fig.savefig("errors.pdf")
 
 # --- Figure 2: Likelihoods and AR Error (individual subplots) ---
-fig, axes = plt.subplots(1, 3, figsize=(15, 4), sharex=True)
+fig, axes = plt.subplots(1, 4, figsize=(15, 4), sharex=True)
 
 plot_series(axes[0], epochs_logged, ar_errors, label="AR Error")
 axes[0].set_title("AR Error")
