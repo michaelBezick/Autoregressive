@@ -648,34 +648,70 @@ def solve_for_phi_matrices(
 
         vector_of_A_matrices[i] = A_neg_1_k
 
-    # third, solve for Lagrange multipliers
     matrix_of_A_matrices_2D = (
         matrix_of_A_matrices.permute(0, 2, 1, 3).contiguous().view(p * n, p * n)
     )
 
     vector_of_A_matrices_2D = vector_of_A_matrices.contiguous().view(p * n, n)
+    # third, solve for Phi (unconstrained LS)
 
-    S = torch.kron(
-        torch.eye(p, device="cuda"), torch.ones(n, 1, device="cuda").t()
-    ) @ torch.linalg.pinv(matrix_of_A_matrices_2D)
-    T = vector_of_A_matrices_2D
-    U = torch.ones((p, 1), device="cuda") @ torch.ones((n, 1), device="cuda").t()
+    A = matrix_of_A_matrices_2D      # (p*n, p*n)
+    B = vector_of_A_matrices_2D      # (p*n, n)
 
-    RHS = torch.linalg.pinv(S) @ (S @ T - U)
+    Phi_flat = torch.linalg.lstsq(A, B).solution   # (p*n, n)
 
-    # let's reshape so we have a p x n matrix of n-length kronecker products
+    Phi_matrices = Phi_flat.view(p, n, n)
+    return Phi_matrices
 
-    RHS = torch.reshape(RHS, (p, n, n))
+def solve_for_phi_matrices_multi(
+    all_skill_parameters: torch.Tensor,  # shape: (n, num_timesteps + p)
+    n: int,
+    p: int,
+    num_timesteps: int,
+):
+    """
+    Solve for Φ_1, ..., Φ_p in the vector AR(p) model
 
-    Lambda_t = torch.mean(RHS, dim=1)
+        x_t ≈ Σ_{k=1}^p Φ_k x_{t-k},
 
-    # lastly, plug back into equation (6) to find phi
+    via ordinary least squares over all available timesteps.
 
-    Phi_matrices = torch.linalg.pinv(matrix_of_A_matrices_2D) @ (
-        vector_of_A_matrices_2D
-        - torch.kron(Lambda_t, torch.ones((n, 1), device="cuda"))
-    )
+    all_skill_parameters: (n, num_timesteps + p), where columns 0..p-1 are
+                          the initial history and columns p..p+num_timesteps-1
+                          are the timesteps used in the likelihood.
+    Returns: Phi_matrices of shape (p, n, n).
+    """
+    device = all_skill_parameters.device
+    dtype = all_skill_parameters.dtype
 
-    Phi_matrices = Phi_matrices.reshape(p, n, n)
+    T_total = all_skill_parameters.shape[1]
+    assert T_total >= num_timesteps + p, "Not enough time steps for AR order p"
+
+    # Targets: x_t for t = p, ..., p + num_timesteps - 1  → shape (n, T)
+    Y = all_skill_parameters[:, p : p + num_timesteps]          # (n, T)
+    T = num_timesteps
+
+    # Design matrix: for each t, stack [x_{t-1}, x_{t-2}, ..., x_{t-p}] (each n-dim)
+    # into a single column of length p*n. Then stack over t.
+    X_cols = []
+    for tau in range(T):
+        t_global = p + tau  # this is t in x_t
+        lags = []
+        for k in range(1, p + 1):
+            # x_{t - k} is at index t_global - k
+            lags.append(all_skill_parameters[:, t_global - k])  # (n,)
+        col = torch.cat(lags, dim=0)  # (p*n,)
+        X_cols.append(col)
+
+    # X: (T, p*n), Y: (T, n)
+    X = torch.stack(X_cols, dim=0).to(device=device, dtype=dtype)  # (T, p*n)
+    Y_reg = Y.T.to(device=device, dtype=dtype)                     # (T, n)
+
+    # Solve min_β ||X β - Y||_F^2. β has shape (p*n, n).
+    beta = torch.linalg.lstsq(X, Y_reg).solution  # (p*n, n)
+
+    # Reshape into Φ_k of shape (n, n) stacked along k.
+    Phi_matrices = beta.view(p, n, n)
 
     return Phi_matrices
+
