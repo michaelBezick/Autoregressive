@@ -22,13 +22,13 @@ from functions_fixed import (
 # parameters
 # -------------------
 
-num_players = 40
+num_players = 30
 AR_order_p = 1
 erdos_renyi_p = 1
 # Sweep over these std deviations:
 std_devs = [0]
 num_timesteps = 100 #IMPORTANT, FOR DETERMINED EQUATION, NEED T >> N
-epochs = 1000
+epochs = 400
 N_grad_descent = 10
 weight = 100
 lr = 1e-3
@@ -117,7 +117,7 @@ for std_dev in std_devs:
             Z,
             W,
             t,
-            games_per_pair=1,
+            games_per_pair=10,
         )
 
     actual_skill_params = skill_params
@@ -182,6 +182,7 @@ for std_dev in std_devs:
             print("AR_error", AR_error.item())
 
             def normalize_alpha(alpha: torch.Tensor) -> torch.Tensor:
+                return alpha
                 alpha_c = alpha.clone()
                 alpha_c -= torch.mean(alpha_c, dim=0)
                 alpha_c /= torch.norm(alpha_c, dim=0)
@@ -204,9 +205,6 @@ for std_dev in std_devs:
                 "p_matrix error: ",
                 F.mse_loss(Phi_matrices_cuda, Phi_matrices_estimate).item(),
             )
-
-            print(Phi_matrices_estimate[:3,:3])
-
 
             true_alphas_error.append(
                 F.mse_loss(
