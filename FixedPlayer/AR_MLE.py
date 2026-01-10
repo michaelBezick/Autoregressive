@@ -16,14 +16,6 @@ from functions_fixed import (
     SkillParametersOneFixed,
 )
 
-"""
-NOW, I need to modify the parameterization, instead of a vector
-for each person of skill parameters, I have a matrix s.t. the columns
-sum to 1.
-
-Furthermore, this property needs to maintain with the AR parameter update
-step, meaning I will need to use Lagrange multipliers in the solution.
-"""
 
 # -------------------
 # parameters
