@@ -27,8 +27,8 @@ AR_order_p = 1
 erdos_renyi_p = 1
 # Sweep over these std deviations:
 std_devs = [0]
-num_timesteps = 100 #IMPORTANT, FOR DETERMINED EQUATION, NEED T >> N
-epochs = 400
+num_timesteps = 100 #IMPORTANT, FOR DETERMINED EQUATION, WE NEED T >> N
+epochs = 1000
 N_grad_descent = 10
 weight = 100
 lr = 1e-3
