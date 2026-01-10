@@ -386,19 +386,21 @@ def setup(num_players, p) -> Tuple[List[torch.Tensor], torch.Tensor]:
 
         initial_skill_params.append(skill_vec)
 
-    # --- AR matrices Φ: only for free players (1..n-1) ---
-    Phi_matrices = torch.randn((p, n_free, n_free))
+    # Phi_matrices = torch.randn((p, n_free, n_free))
+    #
+    # # Softmax over rows (dim=1) as a starting point
+    # Phi_matrices = F.softmax(Phi_matrices, dim=1)
+    #
+    # # Spectral rescaling to keep the AR process stable
+    # Phi_list = [Phi_matrices[k] for k in range(p)]
+    # Phi_list = rescale_for_radius(Phi_list, target=0.995)
+    #
+    # # Renormalize columns to sum to 1
+    # Phi_list = [normalize_columns(P) for P in Phi_list]
+    # Phi_matrices = torch.stack(Phi_list, dim=0)  # (p, n_free, n_free)
 
-    # Softmax over rows (dim=1) as a starting point
-    Phi_matrices = F.softmax(Phi_matrices, dim=1)
-
-    # Spectral rescaling to keep the AR process stable
-    Phi_list = [Phi_matrices[k] for k in range(p)]
-    Phi_list = rescale_for_radius(Phi_list, target=0.995)
-
-    # Renormalize columns to sum to 1
-    Phi_list = [normalize_columns(P) for P in Phi_list]
-    Phi_matrices = torch.stack(Phi_list, dim=0)  # (p, n_free, n_free)
+    Phi_matrices = [torch.eye(n_free) for _ in range(p)]
+    Phi_matrices = torch.stack(Phi_matrices, dim=0)
 
     return initial_skill_params, Phi_matrices
 
@@ -661,6 +663,80 @@ def solve_for_phi_matrices(
     Phi_flat = torch.linalg.lstsq(A, B).solution   # (p*n, n)
 
     Phi_matrices = Phi_flat.view(p, n, n)
+    return Phi_matrices
+
+import torch
+
+def solve_for_phi_matrices_multi_ridge(
+    all_skill_parameters: torch.Tensor,  # (n, num_timesteps + p)
+    n: int,
+    p: int,
+    num_timesteps: int,
+    ridge_lambda: float = 1e-2,          # L2 shrinkage toward 0
+    prior_lambda: float = 0.0,           # L2 shrinkage toward prior Phi0
+    prior_mode: str = "identity",        # "identity" or "zero"
+):
+    """
+    Ridge (and optional identity-prior) fit for vector AR(p):
+        x_t ≈ sum_{k=1..p} Φ_k x_{t-k}
+
+    Returns Φ of shape (p, n, n) consistent with your AR_error prediction:
+        pred = sum_k Φ_k @ x_{t-k}
+    """
+    device = all_skill_parameters.device
+    dtype = all_skill_parameters.dtype
+
+    T_total = all_skill_parameters.shape[1]
+    assert T_total >= num_timesteps + p, "Not enough time steps for AR order p"
+
+    # Targets Y: (n, T)
+    Y = all_skill_parameters[:, p : p + num_timesteps]  # (n, T)
+    T = num_timesteps
+
+    # Build design matrix X_row: (T, p*n) where each row is [x_{t-1}; x_{t-2}; ...; x_{t-p}]
+    X_rows = []
+    for tau in range(T):
+        t_global = p + tau
+        lags = []
+        for k in range(1, p + 1):
+            lags.append(all_skill_parameters[:, t_global - k])  # (n,)
+        X_rows.append(torch.cat(lags, dim=0))                   # (p*n,)
+
+    X_row = torch.stack(X_rows, dim=0).to(device=device, dtype=dtype)  # (T, p*n)
+
+    # We'll solve in column-vector form:
+    #   Y ≈ Φ_stack @ X_stack,  where X_stack = X_row^T is (p*n, T) and Φ_stack is (n, p*n)
+    X_stack = X_row.T  # (p*n, T)
+
+    # Normal equations with ridge/prior:
+    #   Φ_stack = (Y X^T + prior_lambda Φ0) (X X^T + (ridge_lambda+prior_lambda) I)^(-1)
+    XXt = X_stack @ X_stack.T                           # (p*n, p*n)
+    YXt = Y @ X_stack.T                                 # (n, p*n)
+
+    lam = float(ridge_lambda) + float(prior_lambda)
+    A = XXt + lam * torch.eye(p * n, device=device, dtype=dtype)
+
+    if prior_lambda > 0.0:
+        if prior_mode == "identity":
+            # Φ0: first lag = I, remaining lags = 0
+            Phi0 = torch.zeros((p, n, n), device=device, dtype=dtype)
+            Phi0[0] = torch.eye(n, device=device, dtype=dtype)
+        elif prior_mode == "zero":
+            Phi0 = torch.zeros((p, n, n), device=device, dtype=dtype)
+        else:
+            raise ValueError(f"Unknown prior_mode={prior_mode}")
+
+        Phi0_stack = Phi0.permute(1, 0, 2).contiguous().view(n, p * n)  # (n, p*n)
+        B = YXt + float(prior_lambda) * Phi0_stack                      # (n, p*n)
+    else:
+        B = YXt
+
+    # Solve A * M = B^T  =>  M = A^{-1} B^T  =>  Φ_stack = M^T
+    M = torch.linalg.solve(A, B.T)          # (p*n, n)
+    Phi_stack = M.T                         # (n, p*n)
+
+    # Unstack into (p, n, n): blocks along the input dimension
+    Phi_matrices = Phi_stack.view(n, p, n).permute(1, 0, 2).contiguous()  # (p, n, n)
     return Phi_matrices
 
 def solve_for_phi_matrices_multi(

@@ -12,6 +12,7 @@ from functions_fixed import (
     play_games_erdos_renyi,
     setup,
     solve_for_phi_matrices_multi,
+    solve_for_phi_matrices_multi_ridge,
     solve_for_phi_matrices,
     SkillParametersOneFixed,
 )
@@ -21,15 +22,15 @@ from functions_fixed import (
 # parameters
 # -------------------
 
-num_players = 30
+num_players = 40
 AR_order_p = 1
 erdos_renyi_p = 1
 # Sweep over these std deviations:
-std_devs = [0]  # edit this list as you like
-num_timesteps = 30
+std_devs = [0]
+num_timesteps = 100 #IMPORTANT, FOR DETERMINED EQUATION, NEED T >> N
 epochs = 1000
-N_grad_descent = 2
-weight = 200
+N_grad_descent = 10
+weight = 100
 lr = 1e-3
 STEP = 10
 
@@ -156,8 +157,8 @@ for std_dev in std_devs:
                 Phi_matrices_estimate, num_timesteps, AR_order_p
             )
 
-            # normalizing per player
-            AR_error /= num_players - 1
+            # # normalizing per player
+            # AR_error /= num_players - 1
 
             total_likelihood = BTL_likelihood - weight * AR_error
             loss = -total_likelihood
@@ -203,6 +204,9 @@ for std_dev in std_devs:
                 "p_matrix error: ",
                 F.mse_loss(Phi_matrices_cuda, Phi_matrices_estimate).item(),
             )
+
+            print(Phi_matrices_estimate[:3,:3])
+
 
             true_alphas_error.append(
                 F.mse_loss(
