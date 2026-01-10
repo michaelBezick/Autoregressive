@@ -182,13 +182,6 @@ for std_dev in std_devs:
                 num_timesteps,
             )
 
-            # Phi_matrices_estimate = solve_for_phi_matrices_multi(
-            #     skill_params_est.alpha_estimates[1:, :],  # drop player 0
-            #     num_players - 1,
-            #     AR_order_p,
-            #     num_timesteps,
-            # )
-
         if epoch % STEP == 0:
             print("------------------------------")
             print("Epoch: ", epoch)
