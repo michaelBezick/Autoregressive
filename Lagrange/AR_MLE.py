@@ -4,7 +4,7 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 
-from functions_fixed import (
+from functions import (
     SkillParameters,
     center_scores,
     column_sum_residual,
