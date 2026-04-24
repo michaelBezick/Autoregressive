@@ -122,9 +122,7 @@ for epoch in tqdm(range(epochs)):
 
     # --- Project α to zero-mean per timestep (offset invariance) ---
     with torch.no_grad():
-        skill_params_est.alpha_estimates -= skill_params_est.alpha_estimates.mean(
-            dim=0, keepdim=True
-        )
+        skill_params_est.project_identifiability_()
 
     # --- Step B: optimize predictor with α fixed (mean-invariant training) ---
     # Build dataset from current α estimates with column-centering and mean-free targets
@@ -219,7 +217,6 @@ for epoch in tqdm(range(epochs)):
                     - actual_skill_params[:, t_eval].mean()
                 )
                 Y_true.append(y_true_t)
-            breakpoint()
             X_true = torch.stack(X_true, dim=0).to(device)
             Y_true = torch.stack(Y_true, dim=0).to(device)
             Y_pred_true_in = predictor_est(X_true)

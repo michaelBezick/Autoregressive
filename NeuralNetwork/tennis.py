@@ -1,6 +1,8 @@
 import os
+import sys
 import glob
 import math
+from collections import defaultdict
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -9,19 +11,13 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 from scipy.stats import pearsonr
-from collections import defaultdict
 
-
-
-from functions_fixed import (
-    btl_matrix_from_scores,           # kept for compatibility, not used here
-    generate_next_skill_params,       # used for AR rollout on test
-    new_solve_for_phi_matrices,       # kept for compatibility
-    optimize_alphas_until_converged,  # kept for compatibility
-    play_games_erdos_renyi,           # kept for compatibility
-    setup,                            # kept for compatibility
-    solve_for_phi_matrices,
-    SkillParametersOneFixed,
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
+from Lagrange.functions import (
+    SkillParameters,
+    generate_next_skill_params,
+    new_solve_for_phi_matrices,
+    setup,
 )
 
 """
@@ -52,7 +48,7 @@ This script:
 # Parameters
 # ----------------------------------------------------------------------
 MATCHES_DIR = "./matches"
-PLAYERS_PATH = "./atp_players.csv"
+PLAYERS_PATH = "./matches/atp_players.csv"
 
 WIN_COL = "winner_id"
 LOS_COL = "loser_id"
@@ -211,14 +207,11 @@ W_train = W_train.to(device)
 # ----------------------------------------------------------------------
 # 7) BTL + AR training on TRAIN data
 # ----------------------------------------------------------------------
-skill_params_est = SkillParametersOneFixed(num_players, train_timesteps, AR_order_p).to(
-    device
-)
+skill_params_est = SkillParameters(num_players, train_timesteps, AR_order_p).to(device)
+skill_params_est.project_identifiability_()
 optimizer = torch.optim.Adam(params=skill_params_est.parameters(), lr=lr)
 
-Phi_matrices_estimate = torch.randn(
-    (AR_order_p, num_players, num_players), device=device
-)
+_, Phi_matrices_estimate = setup(num_players, AR_order_p, device=device)
 
 ar_errors = []
 btl_likelihoods = []
@@ -228,21 +221,21 @@ for epoch in tqdm(range(epochs)):
     for _ in range(N_grad_descent):
         optimizer.zero_grad()
 
-        BTL_likelihood = skill_params_est.compute_log_BTL(Z_train, W_train, num_players)
-        AR_error = skill_params_est.compute_AR_error(
+        BTL_likelihood = skill_params_est.compute_log_BTL_vectorized_new(Z_train, W_train, num_players)
+        AR_error = skill_params_est.compute_AR_error_new(
             Phi_matrices_estimate, train_timesteps, AR_order_p
         )
-        AR_error = AR_error / num_players
 
         total_likelihood = BTL_likelihood - weight * AR_error
         loss = -total_likelihood
 
         loss.backward()
         optimizer.step()
+        skill_params_est.project_identifiability_()
 
     with torch.no_grad():
-        Phi_matrices_estimate = solve_for_phi_matrices(
-            skill_params_est.alpha_estimates, num_players, AR_order_p, train_timesteps
+        Phi_matrices_estimate = new_solve_for_phi_matrices(
+            skill_params_est.alpha_estimates.detach(), num_players, AR_order_p, train_timesteps, ridge=1e-6
         ).to(device)
 
     if epoch % STEP == 0:
@@ -424,7 +417,8 @@ def compute_neural_AR_error(neural_ar, alpha_estimates, num_timesteps, AR_order_
 # ----------------------------------------------------------------------
 # 8.4) Joint BTL + Neural AR training (end-to-end)
 # ----------------------------------------------------------------------
-skill_params_neural = SkillParametersOneFixed(num_players, train_timesteps, AR_order_p).to(device)
+skill_params_neural = SkillParameters(num_players, train_timesteps, AR_order_p).to(device)
+skill_params_neural.project_identifiability_()
 neural_ar_joint = NeuralARJointForecaster(num_players, AR_order_p, hidden_dim=128).to(device)
 
 optimizer_joint = torch.optim.Adam(
@@ -441,7 +435,7 @@ for epoch in tqdm(range(epochs), desc="Neural-AR joint training"):
         optimizer_joint.zero_grad()
 
         # BTL likelihood with neural skill parameters
-        BTL_likelihood_nn = skill_params_neural.compute_log_BTL(
+        BTL_likelihood_nn = skill_params_neural.compute_log_BTL_vectorized_new(
             Z_train, W_train, num_players
         )
 
@@ -460,6 +454,7 @@ for epoch in tqdm(range(epochs), desc="Neural-AR joint training"):
 
         loss_nn.backward()
         optimizer_joint.step()
+        skill_params_neural.project_identifiability_()
 
     if epoch % STEP == 0:
         print("=" * 30)

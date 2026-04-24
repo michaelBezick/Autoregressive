@@ -182,6 +182,10 @@ class SkillParameters(nn.Module):
         )
         self.AR_order_p = AR_order_p
 
+    def project_identifiability_(self) -> None:
+        with torch.no_grad():
+            self.alpha_estimates.sub_(self.alpha_estimates.mean(dim=0, keepdim=True))
+
     # --- BTL log-likelihood (vectorized & stable) ---
     def compute_log_BTL_vectorized_new(self, Z, W, num_players: int) -> torch.Tensor:
         """

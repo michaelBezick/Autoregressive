@@ -1,0 +1,37 @@
+{
+  "true_ps": [
+    1,
+    2,
+    4,
+    8
+  ],
+  "candidate_ps": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    8,
+    10
+  ],
+  "num_reps": 10,
+  "base_seed": 0,
+  "num_players": 20,
+  "num_timesteps": 60,
+  "erdos_renyi_p": 1.0,
+  "std_dev": 0.1,
+  "train_frac": 0.6,
+  "val_frac": 0.2,
+  "weight": 30.0,
+  "lr": 0.001,
+  "ridge": 1e-06,
+  "outer_epochs": 25,
+  "inner_max_steps": 500,
+  "rel_tol": 0.001,
+  "grad_tol": 5e-05,
+  "patience": 20,
+  "grad_clip": 5.0,
+  "device": "cuda",
+  "save_dir": "model_selection_results"
+}

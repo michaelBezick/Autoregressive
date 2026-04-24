@@ -188,20 +188,43 @@ def normalize_columns(M):
 
 
 
-def setup(num_players, p, device=None, dtype=torch.float32) -> Tuple[List[torch.Tensor], torch.Tensor]:
+def identity_phi_matrices(num_players, p, device=None, dtype=torch.float32) -> torch.Tensor:
+    if p != 1:
+        raise ValueError("Identity Phi mode currently requires p=1.")
     if device is None:
         device = torch.device("cpu")
+    eye = torch.eye(num_players, device=device, dtype=dtype)
+    return eye.unsqueeze(0)
+
+
+
+def setup(
+    num_players,
+    p,
+    device=None,
+    dtype=torch.float32,
+    identity_ar1: bool = False,
+) -> Tuple[List[torch.Tensor], torch.Tensor]:
+    if device is None:
+        device = torch.device("cpu")
+
+    if identity_ar1 and p != 1:
+        raise ValueError("identity_ar1=True requires p=1.")
 
     initial_skill_params = [torch.randn((num_players, 1), device=device, dtype=dtype) for _ in range(p)]
     initial_skill_params = [alpha - alpha.mean() for alpha in initial_skill_params]
 
-    Phi_matrices = torch.randn((p, num_players, num_players), device=device, dtype=dtype)
-    Phi_matrices = F.softmax(Phi_matrices, dim=1)  # columns sum to 1
+    if identity_ar1:
+        Phi_matrices = identity_phi_matrices(num_players, p, device=device, dtype=dtype)
+    else:
+        Phi_matrices = torch.randn((p, num_players, num_players), device=device, dtype=dtype)
+        Phi_matrices = F.softmax(Phi_matrices, dim=1)  # columns sum to 1
 
-    Phi_list = [Phi_matrices[k] for k in range(p)]
-    Phi_list = rescale_for_radius(Phi_list, target=0.995)
-    Phi_list = [normalize_columns(P) for P in Phi_list]
-    Phi_matrices = torch.stack(Phi_list, dim=0)
+        Phi_list = [Phi_matrices[k] for k in range(p)]
+        Phi_list = rescale_for_radius(Phi_list, target=0.995)
+        Phi_list = [normalize_columns(P) for P in Phi_list]
+        Phi_matrices = torch.stack(Phi_list, dim=0)
+
     return initial_skill_params, Phi_matrices
 
 

@@ -1,10 +1,14 @@
+import os
+import sys
+
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 
-from functions import (
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))
+from Lagrange.functions import (
     SkillParameters,
     center_scores,
     column_sum_residual,
@@ -15,7 +19,7 @@ from functions import (
 )
 
 # ----------------------- parameters -----------------------
-num_players = 100
+num_players = 20
 AR_order_p = 10
 erdos_renyi_p = 1.0
 std_dev = 1e-1

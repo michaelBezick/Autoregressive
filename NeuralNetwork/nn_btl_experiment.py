@@ -121,7 +121,7 @@ def run_nn_btl_experiment(
 
         # Project α to zero-mean per timestep (offset invariance)
         with torch.no_grad():
-            skill_params_est.alpha_estimates -= skill_params_est.alpha_estimates.mean(dim=0, keepdim=True)
+            skill_params_est.project_identifiability_()
 
         # ---- NN-step (mean-invariant training) ----
         with torch.no_grad():
